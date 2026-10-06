@@ -1,0 +1,90 @@
+#include "tappy_time_manager.h"
+
+#include <cstdlib>
+#include <esp_log.h>
+#include <esp_netif_sntp.h>
+#include "settings.h"
+
+#define TAG "TappyTime"
+
+TappyTimeManager& TappyTimeManager::GetInstance() {
+    static TappyTimeManager instance;
+    return instance;
+}
+
+void TappyTimeManager::Initialize() {
+    if (initialized_) return;
+
+    // Sri Lanka is UTC+05:30. POSIX TZ signs are reversed, so IST-5:30
+    // means UTC + 5 hours 30 minutes. Keep TAPPY on Sri Lanka's real timezone.
+    setenv("TZ", "IST-5:30", 1);
+    tzset();
+
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    config.start = false;
+    esp_err_t err = esp_netif_sntp_init(&config);
+    if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+        initialized_ = true;
+        ESP_LOGI(TAG, "NTP initialized for TAPPY time UTC+05:30");
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize NTP: %s", esp_err_to_name(err));
+    }
+}
+
+// Kept for API compatibility. Time no longer depends on IP geolocation.
+bool TappyTimeManager::DetectLocation() {
+    return true;
+}
+
+std::string TappyTimeManager::GetLocation() const {
+    return "Kalutara, Sri Lanka";
+}
+
+double TappyTimeManager::GetLatitude() const {
+    return 6.5854;
+}
+
+double TappyTimeManager::GetLongitude() const {
+    return 79.9607;
+}
+
+void TappyTimeManager::StartSync() {
+    if (!initialized_) Initialize();
+    if (!initialized_) return;
+
+    esp_err_t err = esp_netif_sntp_start();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "NTP start failed: %s", esp_err_to_name(err));
+    }
+}
+
+bool TappyTimeManager::IsValid() const {
+    return Now() >= 1704067200;
+}
+
+time_t TappyTimeManager::Now() const {
+    return time(nullptr);
+}
+
+bool TappyTimeManager::GetLocalTime(struct tm& out) const {
+    if (!IsValid()) return false;
+    time_t now = Now();
+    localtime_r(&now, &out);
+    return true;
+}
+
+std::string TappyTimeManager::GetLocalTimeString() const {
+    struct tm local{};
+    if (!GetLocalTime(local)) return "time not synchronized";
+    char buffer[32];
+    strftime(buffer, sizeof(buffer), "%I:%M:%S %p", &local);
+    return buffer;
+}
+
+std::string TappyTimeManager::GetLocalDateString() const {
+    struct tm local{};
+    if (!GetLocalTime(local)) return "date not synchronized";
+    char buffer[32];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d", &local);
+    return buffer;
+}
